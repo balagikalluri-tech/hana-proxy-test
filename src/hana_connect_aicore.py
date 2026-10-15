@@ -3,7 +3,10 @@ import urllib.request, urllib.parse
 from hdbcli import dbapi
 
 # ── Environment Variables ─────────────────────────────────
-CONN_SVC_URL    = os.environ.get("CONN_SVC_URL", "")
+# Grab the SOCKS proxy details directly out of your service key payload variables
+BTP_SOCKS_HOST  = os.environ.get("CONN_PROXY_HOST", "://ondemand.com")
+BTP_SOCKS_PORT  = int(os.environ.get("CONN_PROXY_PORT", "20004"))
+
 CONN_TOKEN_URL  = os.environ.get("CONN_TOKEN_URL", "")
 CONN_CLIENT_ID  = os.environ.get("CONN_CLIENT_ID", "")
 CONN_CLIENT_SEC = os.environ.get("CONN_CLIENT_SECRET", "")
@@ -13,116 +16,69 @@ HANA_PORT       = int(os.environ.get("HANA_PORT", "30041"))
 HANA_USER       = os.environ.get("HANA_USER", "")
 HANA_PASS       = os.environ.get("HANA_PASSWORD", "")
 LOCAL_PROXY_PORT = 20004
-PROXY_HOST       = CONN_SVC_URL.replace("https://","").replace("http://","").rstrip("/")
 
 print("=" * 60)
-print("  AI CORE → HTTP CONNECT → CLOUD CONNECTOR → HANA")
+print("  AI CORE → RAW SOCKS5 INTERCEPT → RISE HANA")
 print("=" * 60)
-print(f"\nConnectivity SVC : {CONN_SVC_URL}")
-print(f"HANA Target      : {HANA_HOST}:{HANA_PORT}")
-print(f"Subaccount ID    : {CONN_SUBACCOUNT}")
 
-# ── Step 1: Reachability ──────────────────────────────────
-print(f"\n[Check] {PROXY_HOST}:443 reachability...")
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.settimeout(10)
-result = s.connect_ex((PROXY_HOST, 443))
-s.close()
-print(f"  Result: {'REACHABLE ✅' if result == 0 else f'NOT REACHABLE ❌ (code: {result})'}")
-if result != 0:
-    raise SystemExit(1)
-
-# ── Step 2: Get OAuth token ───────────────────────────────
-print(f"\nStep 1: Getting connectivity token...")
+# ── Step 1: Obtain Token ──────────────────────────────────
+print("\nStep 1: Getting connectivity token...")
 creds = base64.b64encode(f"{CONN_CLIENT_ID}:{CONN_CLIENT_SEC}".encode()).decode()
 data  = urllib.parse.urlencode({"grant_type": "client_credentials"}).encode()
 req   = urllib.request.Request(
     CONN_TOKEN_URL, data=data,
-    headers={"Authorization": f"Basic {creds}",
-             "Content-Type": "application/x-www-form-urlencoded"}
+    headers={"Authorization": f"Basic {creds}", "Content-Type": "application/x-www-form-urlencoded"}
 )
 with urllib.request.urlopen(req, timeout=30) as resp:
     TOKEN = json.loads(resp.read())["access_token"]
 print(f"  Token obtained ✅ (length: {len(TOKEN)})")
 
-# ── Step 3: HTTP CONNECT tunnel function ──────────────────
-def create_http_connect_tunnel(tgt_host, tgt_port, token):
-    print(f"\n  [Tunnel] POST /api/v1/tunnel → {tgt_host}:{tgt_port}")
-
-    ctx = ssl.create_default_context()
-    raw = socket.create_connection((PROXY_HOST, 443), timeout=30)
-    tun = ctx.wrap_socket(raw, server_hostname=PROXY_HOST)
-
-    req = (
-        f"POST /api/v1/tunnel HTTP/1.1\r\n"
-        f"Host: {PROXY_HOST}\r\n"
-        f"Authorization: Bearer {token}\r\n"
-        f"SAP-Connectivity-SubAccount-ID: {CONN_SUBACCOUNT}\r\n"
-        f"SAP-Connectivity-SCC-Location-ID: SCC_BDC\r\n"
-        f"SAP-Connectivity-Technical-Host: {tgt_host}:{tgt_port}\r\n"
-        f"Upgrade: TCP\r\n"
-        f"Connection: Upgrade\r\n"
-        f"Content-Length: 0\r\n"
-        f"\r\n"
-    )
-    tun.sendall(req.encode())
-
-    resp = b""
-    while b"\r\n\r\n" not in resp:
-        chunk = tun.recv(4096)
-        if not chunk: break
-        resp += chunk
-
-    # Read body too
-    try:
-        body = tun.recv(2048)
-        resp += body
-    except: pass
-
-    full_resp = resp.decode(errors="replace")
-    status_line = full_resp.split("\r\n")[0]
-    print(f"  [Tunnel] Server response: {status_line}")
-    print(f"  [Tunnel] Full response:\n{full_resp}")   # ← shows 403 reason
-
-    if "101" not in status_line:
-        tun.close()
-        raise Exception(f"Tunnel rejected: {status_line}")
-
-    print(f"  [Tunnel] TCP tunnel established ✅")
-    return tun
-# ── Step 4: Local SOCKS5 proxy ────────────────────────────
-def handle_socks5(client_sock, token):
+# ── Step 2: Establish Direct BTP SOCKS Connection ──────────
+def handle_socks5_direct(client_sock, token):
     tunnel_sock = None
     try:
-        # SOCKS5 auth negotiation
+        # Standard SOCKS5 greeting negotiation
         client_sock.recv(262)
-        client_sock.send(b"\x05\x00")
+        client_sock.send(b"\x05\x00") # No auth required locally
 
-        # SOCKS5 CONNECT request
+        # Read target information from hdbcli application packet
         data = client_sock.recv(262)
-        atyp = data[3]
-        if atyp == 0x03:
-            ln       = data[4]
-            tgt_host = data[5:5+ln].decode()
-            tgt_port = struct.unpack("!H", data[5+ln:7+ln])[0]
-        elif atyp == 0x01:
-            tgt_host = socket.inet_ntoa(data[4:8])
-            tgt_port = struct.unpack("!H", data[8:10])[0]
-        else:
-            client_sock.close(); return
+        
+        # Connect safely to BTP proxy service via TLS wrapper
+        ctx = ssl.create_default_context()
+        raw_sock = socket.create_connection((BTP_SOCKS_HOST, BTP_SOCKS_PORT), timeout=30)
+        tunnel_sock = ctx.wrap_socket(raw_sock, server_hostname=BTP_SOCKS_HOST)
 
-        try:
-            tunnel_sock = create_http_connect_tunnel(tgt_host, tgt_port, token)
-            # SOCKS5 success reply
-            client_sock.send(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
-        except Exception as e:
-            print(f"  [Tunnel] Failed: {e}")
+        # Build proprietary SAP Proxy Header
+        # This formats credentials correctly for "Other" landscape tokens
+        sap_header = f"Proxy-Authorization: Bearer {token}\r\n"
+        sap_header += f"SAP-Connectivity-SCC-Location_ID: SCC_BDC\r\n\r\n"
+        
+        # Initial SOCKS5 Handshake down to BTP Gateway
+        tunnel_sock.sendall(b"\x05\x01\x00") # SOCKSv5, Connect, Reserved
+        
+        # Send target mapping data down to the proxy tunnel
+        # Type 3 (Domain Name evaluation)
+        target_payload = b"\x03" + struct.pack("B", len(HANA_HOST)) + HANA_HOST.encode() + struct.pack("!H", HANA_PORT)
+        tunnel_sock.sendall(target_payload)
+        
+        # Inject the text authorization header immediately after target details
+        tunnel_sock.sendall(sap_header.encode())
+
+        # Read the SOCKS5 proxy verification response frame
+        proxy_resp = tunnel_sock.recv(10)
+        if not proxy_resp or proxy_resp[1] != 0x00:
+            print(f"  [Tunnel] Connection rejected by BTP Proxy Status: {proxy_resp}")
             client_sock.send(b"\x05\x01\x00\x01\x00\x00\x00\x00\x00\x00")
-            client_sock.close(); return
+            client_sock.close()
+            return
 
-        # Bridge client ↔ tunnel
+        # Tell hdbcli local wrapper connection setup is successful
+        client_sock.send(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
+        print("  [Tunnel] SOCKS5 secure database pipe active ✅")
+
+        # Two-way network bridging
         stop = threading.Event()
-
         def c2t():
             try:
                 while not stop.is_set():
@@ -141,13 +97,14 @@ def handle_socks5(client_sock, token):
             except: pass
             finally: stop.set()
 
-        t1 = threading.Thread(target=c2t, daemon=True)
-        t2 = threading.Thread(target=t2c, daemon=True)
-        t1.start(); t2.start()
-        t1.join(); t2.join()
+        threading.Thread(target=c2t, daemon=True).start()
+        threading.Thread(target=t2c, daemon=True).start()
+        
+        while not stop.is_set():
+            time.sleep(0.5)
 
     except Exception as e:
-        print(f"  [SOCKS5] Error: {e}")
+        print(f"  [SOCKS5 Bridge Error]: {e}")
     finally:
         try: client_sock.close()
         except: pass
@@ -160,13 +117,12 @@ def run_local_proxy():
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("127.0.0.1", LOCAL_PROXY_PORT))
     srv.listen(5)
-    srv.settimeout(60)
-    print(f"\nStep 2: Local SOCKS5 proxy on 127.0.0.1:{LOCAL_PROXY_PORT} ✅")
+    print(f"Step 2: Monitoring Local Port 127.0.0.1:{LOCAL_PROXY_PORT} ✅")
     try:
         conn, _ = srv.accept()
-        handle_socks5(conn, TOKEN)
-    except socket.timeout:
-        print("  [Proxy] Timeout — no connection received")
+        handle_socks5_direct(conn, TOKEN)
+    except Exception as e:
+        print(f"Proxy runtime exception: {e}")
     finally:
         srv.close()
 
@@ -174,8 +130,8 @@ proxy_thread = threading.Thread(target=run_local_proxy, daemon=True)
 proxy_thread.start()
 time.sleep(1)
 
-# ── Step 5: HANA connection ───────────────────────────────
-print(f"\nStep 3: Connecting HANA via proxy → HTTP CONNECT tunnel...")
+# ── Step 3: Run Database Command ──────────────────────────
+print("\nStep 3: Connecting via hdbcli wrapper...")
 try:
     conn = dbapi.connect(
         address       = HANA_HOST,
@@ -183,21 +139,13 @@ try:
         user          = HANA_USER,
         password      = HANA_PASS,
         proxyHostname = "127.0.0.1",
-        proxyPort     = LOCAL_PROXY_PORT,
-        proxyUsername = TOKEN,
-        proxyPassword = ""
+        proxyPort     = LOCAL_PROXY_PORT
     )
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM SYS.DUMMY")
     row = cursor.fetchone()
-    print(f"\n  HANA response: {row} ✅")
-    print("\n" + "=" * 60)
-    print("  SUCCESS ✅")
-    print("  AI Core → HTTP CONNECT → Cloud Connector → RISE HANA")
-    print("=" * 60)
+    print(f"\n  HANA Response verified: {row} ✅")
     conn.close()
 except Exception as e:
-    print(f"  HANA FAILED ❌: {e}")
+    print(f"  HANA Operation FAILED ❌: {e}")
     raise
-
-proxy_thread.join(timeout=5)
