@@ -64,8 +64,6 @@ def create_http_connect_tunnel(tgt_host, tgt_port, token):
         f"SAP-Connectivity-SCC-Location-ID: SCC_BDC\r\n"
         f"\r\n"
     )
-    )
-    )
     tun.sendall(req.encode())
 
     # Read response
