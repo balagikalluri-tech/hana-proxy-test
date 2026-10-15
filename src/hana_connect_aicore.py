@@ -47,26 +47,29 @@ print(f"  Token obtained ✅ (length: {len(TOKEN)})")
 
 # ── Step 3: HTTP CONNECT tunnel function ──────────────────
 def create_http_connect_tunnel(tgt_host, tgt_port, token):
-    """Create HTTP CONNECT tunnel via SAP Connectivity Service"""
-    print(f"\n  [Tunnel] HTTP CONNECT → {tgt_host}:{tgt_port}")
+    """Create TCP tunnel via SAP Connectivity Service REST API"""
+    print(f"\n  [Tunnel] POST /api/v1/tunnel → {tgt_host}:{tgt_port}")
 
     ctx = ssl.create_default_context()
     raw = socket.create_connection((PROXY_HOST, 443), timeout=30)
     tun = ctx.wrap_socket(raw, server_hostname=PROXY_HOST)
 
-    # HTTP CONNECT request with SAP auth headers
     req = (
-        f"CONNECT {tgt_host}:{tgt_port} HTTP/1.1\r\n"
-        f"Host: {tgt_host}:{tgt_port}\r\n"
-        f"Proxy-Authorization: Bearer {token}\r\n"
+        f"POST /api/v1/tunnel HTTP/1.1\r\n"
+        f"Host: {PROXY_HOST}\r\n"
+        f"Authorization: Bearer {token}\r\n"
         f"SAP-Connectivity-Authentication: Bearer {token}\r\n"
         f"SAP-Connectivity-SubAccount-ID: {CONN_SUBACCOUNT}\r\n"
         f"SAP-Connectivity-SCC-Location-ID: SCC_BDC\r\n"
+        f"SAP-Connectivity-Technical-Host: {tgt_host}:{tgt_port}\r\n"
+        f"Upgrade: TCP\r\n"
+        f"Connection: Upgrade\r\n"
+        f"Content-Length: 0\r\n"
         f"\r\n"
     )
     tun.sendall(req.encode())
 
-    # Read response
+    # Read response — expect HTTP/1.1 101 Switching Protocols
     resp = b""
     while b"\r\n\r\n" not in resp:
         chunk = tun.recv(4096)
@@ -76,13 +79,12 @@ def create_http_connect_tunnel(tgt_host, tgt_port, token):
     status_line = resp.decode(errors="replace").split("\r\n")[0]
     print(f"  [Tunnel] Server response: {status_line}")
 
-    if "200" not in status_line:
+    if "101" not in status_line:
         tun.close()
-        raise Exception(f"HTTP CONNECT rejected: {status_line}")
+        raise Exception(f"Tunnel rejected: {status_line}")
 
-    print(f"  [Tunnel] Tunnel established ✅")
+    print(f"  [Tunnel] TCP tunnel established ✅")
     return tun
-
 # ── Step 4: Local SOCKS5 proxy ────────────────────────────
 def handle_socks5(client_sock, token):
     tunnel_sock = None
