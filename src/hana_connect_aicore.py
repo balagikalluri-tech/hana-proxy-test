@@ -65,6 +65,7 @@ def create_http_connect_tunnel(tgt_host, tgt_port, token):
         f"\r\n"
     )
     )
+    )
     tun.sendall(req.encode())
 
     # Read response
