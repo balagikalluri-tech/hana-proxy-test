@@ -61,7 +61,9 @@ def create_http_connect_tunnel(tgt_host, tgt_port, token):
         f"Proxy-Authorization: Bearer {token}\r\n"
         f"SAP-Connectivity-Authentication: Bearer {token}\r\n"
         f"SAP-Connectivity-SubAccount-ID: {CONN_SUBACCOUNT}\r\n"
+        f"SAP-Connectivity-SCC-Location-ID: SCC_BDC\r\n"
         f"\r\n"
+    )
     )
     tun.sendall(req.encode())
 
