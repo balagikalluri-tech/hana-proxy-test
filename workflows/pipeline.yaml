@@ -21,25 +21,7 @@ spec:
         imagePullPolicy: Always
         command: ["python", "/app/hana_connect_aicore.py"]
         env:
-          - name: CONN_SVC_URL
-            value: "https://connectivity.cf.us10.hana.ondemand.com"
-          - name: CONN_TUNNEL_PATH
-            value: "/api/v1/tunnel"
-          - name: CONN_TOKEN_URL
-            value: "https://wppkp2jrxgmvt0pf.authentication.us10.hana.ondemand.com/oauth/token"
-          - name: CONN_CLIENT_ID
-            value: "sb-clone6ff5ea12b74543b99ef618dcbd25acf9!b658828|connectivity!b7"
-          - name: CONN_CLIENT_SECRET
-            value: "233e4af4-1faf-4e2e-adda-fe058c551666$HpqcmBmEV1lmbQJP9m1MKOw7RiS2szn297QtDgg143c="
-          - name: CONN_SUBACCOUNT_ID
-            value: "a2cc6dce-e6c9-42d2-b4aa-26be5a4c22ad"
-          - name: CONN_SUBDOMAIN
-            value: "wppkp2jrxgmvt0pf"
-          - name: HANA_HOST
-            value: "s4h-hana-virtual"
-          - name: HANA_PORT
-            value: "30041"
-          - name: HANA_USER
-            value: "PLACEHOLDER_USER"
-          - name: HANA_PASSWORD
-            value: "PLACEHOLDER_PASS"
+          - name: CF_BRIDGE_URL
+            value: "https://adobe-hana-bridge.cfapps.us10-003.hana.ondemand.com"
+          - name: BRIDGE_API_KEY
+            value: "AdobeHanaBridge2026"
