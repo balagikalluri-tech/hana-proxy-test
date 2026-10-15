@@ -47,7 +47,6 @@ print(f"  Token obtained ✅ (length: {len(TOKEN)})")
 
 # ── Step 3: HTTP CONNECT tunnel function ──────────────────
 def create_http_connect_tunnel(tgt_host, tgt_port, token):
-    """Create TCP tunnel via SAP Connectivity Service REST API"""
     print(f"\n  [Tunnel] POST /api/v1/tunnel → {tgt_host}:{tgt_port}")
 
     ctx = ssl.create_default_context()
@@ -58,7 +57,6 @@ def create_http_connect_tunnel(tgt_host, tgt_port, token):
         f"POST /api/v1/tunnel HTTP/1.1\r\n"
         f"Host: {PROXY_HOST}\r\n"
         f"Authorization: Bearer {token}\r\n"
-        f"SAP-Connectivity-Authentication: Bearer {token}\r\n"
         f"SAP-Connectivity-SubAccount-ID: {CONN_SUBACCOUNT}\r\n"
         f"SAP-Connectivity-SCC-Location-ID: SCC_BDC\r\n"
         f"SAP-Connectivity-Technical-Host: {tgt_host}:{tgt_port}\r\n"
@@ -69,15 +67,22 @@ def create_http_connect_tunnel(tgt_host, tgt_port, token):
     )
     tun.sendall(req.encode())
 
-    # Read response — expect HTTP/1.1 101 Switching Protocols
     resp = b""
     while b"\r\n\r\n" not in resp:
         chunk = tun.recv(4096)
         if not chunk: break
         resp += chunk
 
-    status_line = resp.decode(errors="replace").split("\r\n")[0]
+    # Read body too
+    try:
+        body = tun.recv(2048)
+        resp += body
+    except: pass
+
+    full_resp = resp.decode(errors="replace")
+    status_line = full_resp.split("\r\n")[0]
     print(f"  [Tunnel] Server response: {status_line}")
+    print(f"  [Tunnel] Full response:\n{full_resp}")   # ← shows 403 reason
 
     if "101" not in status_line:
         tun.close()
